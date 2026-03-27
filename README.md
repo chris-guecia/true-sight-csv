@@ -5,7 +5,8 @@
 A high-performance Rust-based CSV analysis tool that reveals hidden patterns and potential data quality issues in your CSV files. Just as the True Sight spell reveals what's hidden from normal view, this tool uncovers the hidden problems in your data that could impact your analysis.
 
 ## 🚀 Key Features
-   - 🔍 Data Quality Detection: Identifies empty fields, NULL-like values, and whitespace-only entries
+   - 🔍 Data Quality Detection: Identifies empty fields, NULL-like values, whitespace-only entries, placeholder values, digits-only fields, and dash-only fields
+   - 🏷️ Header Analysis: Detects missing, empty, duplicate, or malformed column headers before processing begins
    - ⚡ High Performance: Parallel processing with chunked file reading for handling large datasets
    - 📊 Detailed Reporting: Comprehensive statistics with percentages and processing metrics in spark-like table format
    - 🔄 Memory Efficient: Processes files in configurable chunks (default: 1M rows) to handle datasets larger than available RAM
@@ -14,10 +15,20 @@ A high-performance Rust-based CSV analysis tool that reveals hidden patterns and
 
 
 ## 🔍 Current Checks
-- Detects basic patterns in CSV data:
-  - Empty fields
-  - NULL-Like Stings variatons of "NULL", "N/A", "NA", "NONE", "NaN"
-  - Whitespace-only values
+
+### Data Checks (per cell)
+- Empty fields
+- NULL-like values — variations of `NULL`, `N/A`, `NA`, `NONE`, `NaN` (case-insensitive)
+- Whitespace-only values
+- Placeholder values — `TBD`, `TODO`, `PLACEHOLDER`, `UNKNOWN` (case-insensitive)
+- Digits-only values — fields containing only numeric characters
+- Dash-only values — fields whose trimmed value is `-` or `--`
+
+### Header Checks (once per file)
+- Empty column names (e.g. trailing comma in header row)
+- Duplicate column names
+- NULL-like column names
+- Numeric column names — flags columns that may be data values mistaken for headers, with a warning when all headers are numeric (strong signal the file is missing a header row entirely)
 
 ## 🛠️ Installation
 ```bash
