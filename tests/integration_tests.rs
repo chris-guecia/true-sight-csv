@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::path::PathBuf;
 use true_sight_csv::{
-    prepare_csv_reader, process_csv_chunks, CsvChunkIterator, DashOnlyCheck, DigitsOnlyCheck,
-    EmptyCheck, NullLikeCheck, PatternCheck, PlaceholderCheck, ProcessingConfig,
-    WhiteSpaceOnlyCheck,
+    analyze_headers, prepare_csv_reader, process_csv_chunks, CsvChunkIterator, DashOnlyCheck,
+    DigitsOnlyCheck, EmptyCheck, HeaderIssue, NullLikeCheck, PatternCheck, PlaceholderCheck,
+    ProcessingConfig, WhiteSpaceOnlyCheck,
 };
 
 // Helper function to get the path to a fixture file
@@ -385,5 +385,71 @@ fn test_dash_only_check_trait_metadata() {
     assert_eq!(
         check.show_check_pattern(),
         "Fields whose trimmed value is '-' or '--'"
+    );
+}
+
+#[test]
+fn test_analyze_headers_warehouse_csv_flags_empty_column() {
+    // sample-warehouse-data.csv has a trailing comma in the header row,
+    // producing an unnamed col_8.
+    let path = get_fixture_path("sample-warehouse-data.csv");
+    let (headers, _rdr) = prepare_csv_reader(&path).unwrap();
+    let result = analyze_headers(&headers);
+
+    assert!(
+        result
+            .issues
+            .iter()
+            .any(|i| matches!(i, HeaderIssue::EmptyHeader { index: 8 })),
+        "Expected an EmptyHeader issue for col_8"
+    );
+    assert!(!result.likely_missing_header);
+}
+
+#[test]
+fn test_analyze_headers_no_header_partial_numeric() {
+    // no-header-data.csv has no header row; the first data row (mixed text + numbers)
+    // is parsed as headers. Numeric fields should be flagged but likely_missing_header
+    // stays false because not ALL headers are numeric.
+    let path = get_fixture_path("no-header-data.csv");
+    let (headers, _rdr) = prepare_csv_reader(&path).unwrap();
+    let result = analyze_headers(&headers);
+
+    let numeric_issues: Vec<_> = result
+        .issues
+        .iter()
+        .filter(|i| matches!(i, HeaderIssue::NumericHeader { .. }))
+        .collect();
+
+    assert!(
+        !numeric_issues.is_empty(),
+        "Expected NumericHeader issues for the numeric fields in first data row"
+    );
+    assert!(
+        !result.likely_missing_header,
+        "likely_missing_header should be false when only some headers are numeric"
+    );
+}
+
+#[test]
+fn test_analyze_headers_all_numeric_triggers_warning() {
+    // no-header-all-numeric.csv has no header row and every field in the first
+    // data row is a number — the strongest signal that the header row is missing.
+    let path = get_fixture_path("no-header-all-numeric.csv");
+    let (headers, _rdr) = prepare_csv_reader(&path).unwrap();
+    let result = analyze_headers(&headers);
+
+    assert!(
+        result.likely_missing_header,
+        "Expected likely_missing_header=true when all headers are numeric"
+    );
+    assert_eq!(
+        result
+            .issues
+            .iter()
+            .filter(|i| matches!(i, HeaderIssue::NumericHeader { .. }))
+            .count(),
+        headers.len(),
+        "Every header should produce a NumericHeader issue"
     );
 }

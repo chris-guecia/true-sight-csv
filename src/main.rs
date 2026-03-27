@@ -5,7 +5,8 @@ use clap::Parser;
 use std::time::Instant;
 use true_sight_csv::print_chunk_results_spark_style;
 use true_sight_csv::{
-    prepare_csv_reader, process_csv_chunks, CsvAggregator, CsvChunkIterator, ProcessingConfig,
+    analyze_headers, prepare_csv_reader, process_csv_chunks, CsvAggregator, CsvChunkIterator,
+    HeaderIssue, ProcessingConfig,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,6 +24,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get both headers and reader
     let (found_headers, mut rdr) = prepare_csv_reader(validated_path)?;
     println!("Found headers: {:?}", found_headers);
+
+    // Header analysis — runs before data processing
+    let header_analysis = analyze_headers(&found_headers);
+    if header_analysis.issues.is_empty() {
+        println!("\n=== HEADER ANALYSIS ===");
+        println!("No header issues detected.");
+    } else {
+        println!("\n=== HEADER ANALYSIS ===");
+        if header_analysis.likely_missing_header {
+            println!(
+                "WARNING: All headers appear to be numeric. \
+                 The file may be missing a header row and the first data row is being used as column names."
+            );
+        }
+        for issue in &header_analysis.issues {
+            match issue {
+                HeaderIssue::EmptyHeader { index } => {
+                    println!("  [EMPTY]     col_{index} has no name");
+                }
+                HeaderIssue::DuplicateHeader { name, indices } => {
+                    println!(
+                        "  [DUPLICATE] \"{}\" appears {} times (cols: {:?})",
+                        name,
+                        indices.len(),
+                        indices
+                    );
+                }
+                HeaderIssue::NullLikeHeader { index, name } => {
+                    println!(
+                        "  [NULL-LIKE] col_{index} header is a null-like value: \"{}\"",
+                        name
+                    );
+                }
+                HeaderIssue::NumericHeader { index, name } => {
+                    println!(
+                        "  [NUMERIC]   col_{index} header is numeric: \"{}\" \
+                         (may indicate missing header row)",
+                        name
+                    );
+                }
+            }
+        }
+    }
 
     // Define chunk size
     let chunk_size = args.row_chunk_size;

@@ -150,6 +150,135 @@ impl PatternCheck for WhiteSpaceOnlyCheck {
     }
 }
 
+// Header Analysis
+#[derive(Debug, Clone)]
+pub enum HeaderIssue {
+    EmptyHeader { index: usize },
+    DuplicateHeader { name: String, indices: Vec<usize> },
+    NullLikeHeader { index: usize, name: String },
+    NumericHeader { index: usize, name: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct HeaderAnalysisResult {
+    pub issues: Vec<HeaderIssue>,
+    /// True when every non-empty header looks like a data value (all numeric),
+    /// suggesting the file has no header row and the first data row was parsed as one.
+    pub likely_missing_header: bool,
+}
+
+pub fn analyze_headers(headers: &[String]) -> HeaderAnalysisResult {
+    let mut issues = Vec::new();
+
+    // Empty headers
+    for (i, h) in headers.iter().enumerate() {
+        if h.is_empty() {
+            issues.push(HeaderIssue::EmptyHeader { index: i });
+        }
+    }
+
+    // Duplicate headers
+    let mut seen: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, h) in headers.iter().enumerate() {
+        seen.entry(h.as_str()).or_default().push(i);
+    }
+    let mut dups: Vec<_> = seen
+        .into_iter()
+        .filter(|(name, indices)| !name.is_empty() && indices.len() > 1)
+        .collect();
+    dups.sort_by_key(|(name, _)| name.to_string());
+    for (name, indices) in dups {
+        issues.push(HeaderIssue::DuplicateHeader {
+            name: name.to_string(),
+            indices,
+        });
+    }
+
+    // NULL-like headers (e.g. a header cell containing "NULL" or "N/A")
+    let null_check = NullLikeCheck::new();
+    for (i, h) in headers.iter().enumerate() {
+        if null_check.check(h) {
+            issues.push(HeaderIssue::NullLikeHeader {
+                index: i,
+                name: h.clone(),
+            });
+        }
+    }
+
+    // Numeric headers — individual issues and a file-level "likely missing header" flag
+    let digits_check = DigitsOnlyCheck::new();
+    let numeric_indices: Vec<usize> = headers
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| !h.is_empty() && digits_check.check(h))
+        .map(|(i, _)| i)
+        .collect();
+
+    for &i in &numeric_indices {
+        issues.push(HeaderIssue::NumericHeader {
+            index: i,
+            name: headers[i].clone(),
+        });
+    }
+
+    let non_empty_count = headers.iter().filter(|h| !h.is_empty()).count();
+    let likely_missing_header = non_empty_count > 0 && numeric_indices.len() == non_empty_count;
+
+    HeaderAnalysisResult {
+        issues,
+        likely_missing_header,
+    }
+}
+
+#[test]
+fn test_analyze_headers_clean() {
+    let headers = vec![
+        "customer_id".to_string(),
+        "email".to_string(),
+        "amount".to_string(),
+    ];
+    let result = analyze_headers(&headers);
+    assert!(result.issues.is_empty());
+    assert!(!result.likely_missing_header);
+}
+
+#[test]
+fn test_analyze_headers_empty() {
+    let headers = vec!["name".to_string(), "".to_string(), "email".to_string()];
+    let result = analyze_headers(&headers);
+    assert!(result
+        .issues
+        .iter()
+        .any(|i| matches!(i, HeaderIssue::EmptyHeader { index: 1 })));
+}
+
+#[test]
+fn test_analyze_headers_duplicate() {
+    let headers = vec!["name".to_string(), "email".to_string(), "name".to_string()];
+    let result = analyze_headers(&headers);
+    assert!(result
+        .issues
+        .iter()
+        .any(|i| matches!(i, HeaderIssue::DuplicateHeader { .. })));
+}
+
+#[test]
+fn test_analyze_headers_null_like() {
+    let headers = vec!["customer_id".to_string(), "NULL".to_string()];
+    let result = analyze_headers(&headers);
+    assert!(result
+        .issues
+        .iter()
+        .any(|i| matches!(i, HeaderIssue::NullLikeHeader { .. })));
+}
+
+#[test]
+fn test_analyze_headers_all_numeric_likely_missing() {
+    let headers = vec!["1001".to_string(), "20240115".to_string(), "5".to_string()];
+    let result = analyze_headers(&headers);
+    assert!(result.likely_missing_header);
+}
+
 // Digits Only Check Strategy
 pub struct DigitsOnlyCheck;
 

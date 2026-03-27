@@ -1,5 +1,7 @@
 # true-sight-csv
 
+![banner](image.png)
+
 A high-performance Rust-based CSV analysis tool that reveals hidden patterns and potential data quality issues in your CSV files. Just as the True Sight spell reveals what's hidden from normal view, this tool uncovers the hidden problems in your data that could impact your analysis.
 
 ## 🚀 Key Features
@@ -132,7 +134,7 @@ cargo run -- "path/to/your/file.csv"
 # With options during development
 cargo run -- "path/to/your/file.csv" --row-chunk-size 250000
 cargo run -- "path/to/your/file.csv" --disable-parallel
-cargo run -- "path/to/your/file.csv" --row-chunk-size 100000 --disable-parallel
+cargo run -- "path/to/your/file.csv" --row-chunk-size 100000
 ```
 
 ## 🛠️ Development Setup
