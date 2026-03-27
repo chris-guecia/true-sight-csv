@@ -70,6 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &result.null_counts,
             &result.empty_counts,
             &result.whitespace_counts,
+            &result.digits_only_counts,
+            &result.placeholder_counts,
+            &result.dash_only_counts,
             result.rows_processed,
         );
     }

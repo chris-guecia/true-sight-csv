@@ -46,8 +46,8 @@ repos:
         language: system
         files: "Cargo\\.(toml|lock)$"
         pass_filenames: false
-        # Optional: only run if cargo-audit is installed
-        # You can install it with: cargo install cargo-audit
+        # Temporarily disabled: advisory DB parse error on CVSS 4.0 entries (upstream bug)
+        stages: [manual]
 
 # Optional: Configure specific settings
 default_language_version:

@@ -150,6 +150,157 @@ impl PatternCheck for WhiteSpaceOnlyCheck {
     }
 }
 
+// Digits Only Check Strategy
+pub struct DigitsOnlyCheck;
+
+impl Default for DigitsOnlyCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DigitsOnlyCheck {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl PatternCheck for DigitsOnlyCheck {
+    fn name(&self) -> &str {
+        "DigitsOnlyCheck"
+    }
+    fn check(&self, value: &str) -> bool {
+        !value.is_empty() && value.chars().all(|c| c.is_ascii_digit())
+    }
+    fn show_check_pattern(&self) -> &str {
+        "Fields containing only digit characters (0-9)"
+    }
+}
+
+// Dash-Only Values Check Strategy
+pub struct DashOnlyCheck;
+
+impl Default for DashOnlyCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DashOnlyCheck {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl PatternCheck for DashOnlyCheck {
+    fn name(&self) -> &str {
+        "DASH_ONLY"
+    }
+
+    fn check(&self, value: &str) -> bool {
+        let trimmed = value.trim();
+        trimmed == "-" || trimmed == "--"
+    }
+
+    fn show_check_pattern(&self) -> &str {
+        "Fields whose trimmed value is '-' or '--'"
+    }
+}
+
+#[test]
+fn test_dash_only_check() {
+    let check = DashOnlyCheck::new();
+    assert!(check.check("-"));
+    assert!(check.check("--"));
+    assert!(check.check("  -  "));
+    assert!(check.check("  --  "));
+    assert!(!check.check(""));
+    assert!(!check.check("---"));
+    assert!(!check.check("a-b"));
+    assert!(!check.check("some value"));
+}
+
+// Placeholder-Like Values Check Strategy
+pub struct PlaceholderCheck;
+
+impl Default for PlaceholderCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlaceholderCheck {
+    pub const PLACEHOLDER_VALUES: [&'static str; 4] = ["TBD", "TODO", "PLACEHOLDER", "UNKNOWN"];
+
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl PatternCheck for PlaceholderCheck {
+    fn name(&self) -> &str {
+        "PLACEHOLDER_VALUES"
+    }
+
+    fn check(&self, value: &str) -> bool {
+        let trimmed = value.trim();
+        Self::PLACEHOLDER_VALUES
+            .iter()
+            .any(|&placeholder| trimmed.eq_ignore_ascii_case(placeholder))
+    }
+
+    fn show_check_pattern(&self) -> &str {
+        "TBD, TODO, PLACEHOLDER, UNKNOWN"
+    }
+}
+
+#[test]
+fn test_digits_only_check() {
+    let check = DigitsOnlyCheck::new();
+    // Should match fields with only digit characters
+    assert!(check.check("0"));
+    assert!(check.check("123"));
+    assert!(check.check("0009"));
+    assert!(check.check("1001"));
+    assert!(check.check("94105"));
+    // Should not match empty strings
+    assert!(!check.check(""));
+    // Should not match strings with non-digit characters
+    assert!(!check.check("12.34"));
+    assert!(!check.check("123abc"));
+    assert!(!check.check(" 123"));
+    assert!(!check.check("123 "));
+    assert!(!check.check("SKU123"));
+    assert!(!check.check("N/A"));
+}
+
+#[test]
+fn test_digits_only_check_name_and_pattern() {
+    let check = DigitsOnlyCheck::new();
+    assert_eq!(check.name(), "DigitsOnlyCheck");
+    assert_eq!(
+        check.show_check_pattern(),
+        "Fields containing only digit characters (0-9)"
+    );
+}
+
+#[test]
+fn test_placeholder_check() {
+    let check = PlaceholderCheck::new();
+    assert!(check.check("TBD"));
+    assert!(check.check("tbd"));
+    assert!(check.check("TODO"));
+    assert!(check.check("todo"));
+    assert!(check.check("PLACEHOLDER"));
+    assert!(check.check("placeholder"));
+    assert!(check.check("UNKNOWN"));
+    assert!(check.check("unknown"));
+    assert!(check.check("  TBD  "));
+    assert!(!check.check(""));
+    assert!(!check.check("some value"));
+    assert!(!check.check("NULL"));
+}
+
 // NULL Like Values Check Strategy
 pub struct NullLikeCheck;
 
@@ -190,6 +341,9 @@ pub struct ColumnStats {
     null_like_count: usize,
     empty_count: usize,
     white_space_only_count: usize, // Add other statistics as needed (pattern matches, etc.)
+    digits_only_count: usize,
+    placeholder_count: usize,
+    dash_only_count: usize,
 }
 
 #[derive(Clone)]
@@ -209,7 +363,10 @@ impl CsvAggregator {
             ColumnStats {
                 null_like_count: 0,
                 empty_count: 0,
-                white_space_only_count: 0
+                white_space_only_count: 0,
+                digits_only_count: 0,
+                placeholder_count: 0,
+                dash_only_count: 0,
             };
             column_count
         ];
@@ -224,11 +381,15 @@ impl CsvAggregator {
     }
 
     // Add chunk results to aggregator
+    #[allow(clippy::too_many_arguments)]
     pub fn add_chunk_results(
         &mut self,
         null_map: &HashMap<usize, usize>,
         empty_map: &HashMap<usize, usize>,
         white_space_only_map: &HashMap<usize, usize>,
+        digits_only_map: &HashMap<usize, usize>,
+        placeholder_map: &HashMap<usize, usize>,
+        dash_only_map: &HashMap<usize, usize>,
         chunk_size: usize,
     ) {
         // Update total row count
@@ -252,6 +413,27 @@ impl CsvAggregator {
         for (&col, &count) in white_space_only_map.iter() {
             if col < self.column_stats.len() {
                 self.column_stats[col].white_space_only_count += count;
+            }
+        }
+
+        // Update digits_only_map counts
+        for (&col, &count) in digits_only_map.iter() {
+            if col < self.column_stats.len() {
+                self.column_stats[col].digits_only_count += count;
+            }
+        }
+
+        // Update placeholder_map counts
+        for (&col, &count) in placeholder_map.iter() {
+            if col < self.column_stats.len() {
+                self.column_stats[col].placeholder_count += count;
+            }
+        }
+
+        // Update dash_only_map counts
+        for (&col, &count) in dash_only_map.iter() {
+            if col < self.column_stats.len() {
+                self.column_stats[col].dash_only_count += count;
             }
         }
     }
@@ -325,6 +507,12 @@ impl CsvAggregator {
                 0.0
             };
 
+            let digits_only_percent = if self.total_rows > 0 {
+                (stats.digits_only_count as f64 / self.total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+
             report.push_str(&format!(
                 "  NULL-like values: {} ({:.2}%)\n",
                 stats.null_like_count, null_percent
@@ -338,6 +526,33 @@ impl CsvAggregator {
             report.push_str(&format!(
                 "  White-Space-Only values: {} ({:.2}%)\n",
                 stats.white_space_only_count, white_space_only_percent
+            ));
+
+            let placeholder_percent = if self.total_rows > 0 {
+                (stats.placeholder_count as f64 / self.total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            report.push_str(&format!(
+                "  Digits-Only values: {} ({:.2}%)\n",
+                stats.digits_only_count, digits_only_percent
+            ));
+
+            report.push_str(&format!(
+                "  Placeholder values: {} ({:.2}%)\n",
+                stats.placeholder_count, placeholder_percent
+            ));
+
+            let dash_only_percent = if self.total_rows > 0 {
+                (stats.dash_only_count as f64 / self.total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            report.push_str(&format!(
+                "  Dash-Only values: {} ({:.2}%)\n",
+                stats.dash_only_count, dash_only_percent
             ));
 
             report.push('\n');
@@ -355,6 +570,9 @@ pub struct ChunkProcessingResult {
     pub null_counts: HashMap<usize, usize>,
     pub empty_counts: HashMap<usize, usize>,
     pub whitespace_counts: HashMap<usize, usize>,
+    pub digits_only_counts: HashMap<usize, usize>,
+    pub placeholder_counts: HashMap<usize, usize>,
+    pub dash_only_counts: HashMap<usize, usize>,
 }
 
 // Struct to hold overall processing configuration
@@ -380,6 +598,9 @@ pub fn process_csv_chunks<R: Read>(
     let null_check = Arc::new(NullLikeCheck::new());
     let empty_check = Arc::new(EmptyCheck::new());
     let white_space_only_check = Arc::new(WhiteSpaceOnlyCheck::new());
+    let digits_only_check = Arc::new(DigitsOnlyCheck::new());
+    let placeholder_check = Arc::new(PlaceholderCheck::new());
+    let dash_only_check = Arc::new(DashOnlyCheck::new());
 
     let mut results = Vec::new();
     let mut chunk_number = 0;
@@ -395,6 +616,9 @@ pub fn process_csv_chunks<R: Read>(
                     &null_check,
                     &empty_check,
                     &white_space_only_check,
+                    &digits_only_check,
+                    &placeholder_check,
+                    &dash_only_check,
                     config.enable_parallel,
                 )?;
 
@@ -410,17 +634,24 @@ pub fn process_csv_chunks<R: Read>(
 }
 
 // Process a single chunk
+#[allow(clippy::too_many_arguments)]
 pub fn process_single_chunk(
     records: &[csv::StringRecord],
     chunk_number: usize,
     null_check: &Arc<NullLikeCheck>,
     empty_check: &Arc<EmptyCheck>,
     whitespace_check: &Arc<WhiteSpaceOnlyCheck>,
+    digits_only_check: &Arc<DigitsOnlyCheck>,
+    placeholder_check: &Arc<PlaceholderCheck>,
+    dash_only_check: &Arc<DashOnlyCheck>,
     enable_parallel: bool,
 ) -> Result<ChunkProcessingResult, Box<dyn std::error::Error>> {
     let null_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
     let empty_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
     let whitespace_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
+    let digits_only_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
+    let placeholder_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
+    let dash_only_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
 
     if enable_parallel {
         records.par_iter().for_each(|record| {
@@ -429,9 +660,15 @@ pub fn process_single_chunk(
                 &null_counters,
                 &empty_counters,
                 &whitespace_counters,
+                &digits_only_counters,
+                &placeholder_counters,
+                &dash_only_counters,
                 null_check,
                 empty_check,
                 whitespace_check,
+                digits_only_check,
+                placeholder_check,
+                dash_only_check,
             );
         });
     } else {
@@ -441,9 +678,15 @@ pub fn process_single_chunk(
                 &null_counters,
                 &empty_counters,
                 &whitespace_counters,
+                &digits_only_counters,
+                &placeholder_counters,
+                &dash_only_counters,
                 null_check,
                 empty_check,
                 whitespace_check,
+                digits_only_check,
+                placeholder_check,
+                dash_only_check,
             );
         });
     }
@@ -452,6 +695,9 @@ pub fn process_single_chunk(
     let null_counts = null_counters.lock().unwrap().clone();
     let empty_counts = empty_counters.lock().unwrap().clone();
     let whitespace_counts = whitespace_counters.lock().unwrap().clone();
+    let digits_only_counts = digits_only_counters.lock().unwrap().clone();
+    let placeholder_counts = placeholder_counters.lock().unwrap().clone();
+    let dash_only_counts = dash_only_counters.lock().unwrap().clone();
 
     Ok(ChunkProcessingResult {
         chunk_number,
@@ -459,22 +705,35 @@ pub fn process_single_chunk(
         null_counts,
         empty_counts,
         whitespace_counts,
+        digits_only_counts,
+        placeholder_counts,
+        dash_only_counts,
     })
 }
 
 // Process a single record - the core logic
+#[allow(clippy::too_many_arguments)]
 fn process_record(
     record: &csv::StringRecord,
     null_counters: &Arc<Mutex<HashMap<usize, usize>>>,
     empty_counters: &Arc<Mutex<HashMap<usize, usize>>>,
     whitespace_counters: &Arc<Mutex<HashMap<usize, usize>>>,
+    digits_only_counters: &Arc<Mutex<HashMap<usize, usize>>>,
+    placeholder_counters: &Arc<Mutex<HashMap<usize, usize>>>,
+    dash_only_counters: &Arc<Mutex<HashMap<usize, usize>>>,
     null_check: &Arc<NullLikeCheck>,
     empty_check: &Arc<EmptyCheck>,
     whitespace_check: &Arc<WhiteSpaceOnlyCheck>,
+    digits_only_check: &Arc<DigitsOnlyCheck>,
+    placeholder_check: &Arc<PlaceholderCheck>,
+    dash_only_check: &Arc<DashOnlyCheck>,
 ) {
     let mut local_null_findings = Vec::new();
     let mut local_empty_findings = Vec::new();
     let mut local_whitespace_findings = Vec::new();
+    let mut local_digits_only_findings = Vec::new();
+    let mut local_placeholder_findings = Vec::new();
+    let mut local_dash_only_findings = Vec::new();
 
     for (i, field) in record.iter().enumerate() {
         if null_check.check(field) {
@@ -485,6 +744,15 @@ fn process_record(
         }
         if whitespace_check.check(field) {
             local_whitespace_findings.push(i);
+        }
+        if digits_only_check.check(field) {
+            local_digits_only_findings.push(i);
+        }
+        if placeholder_check.check(field) {
+            local_placeholder_findings.push(i);
+        }
+        if dash_only_check.check(field) {
+            local_dash_only_findings.push(i);
         }
     }
 
@@ -507,6 +775,27 @@ fn process_record(
         let mut whitespace_map = whitespace_counters.lock().unwrap();
         for col in local_whitespace_findings {
             *whitespace_map.entry(col).or_insert(0) += 1;
+        }
+    }
+
+    if !local_digits_only_findings.is_empty() {
+        let mut digits_only_map = digits_only_counters.lock().unwrap();
+        for col in local_digits_only_findings {
+            *digits_only_map.entry(col).or_insert(0) += 1;
+        }
+    }
+
+    if !local_placeholder_findings.is_empty() {
+        let mut placeholder_map = placeholder_counters.lock().unwrap();
+        for col in local_placeholder_findings {
+            *placeholder_map.entry(col).or_insert(0) += 1;
+        }
+    }
+
+    if !local_dash_only_findings.is_empty() {
+        let mut dash_only_map = dash_only_counters.lock().unwrap();
+        for col in local_dash_only_findings {
+            *dash_only_map.entry(col).or_insert(0) += 1;
         }
     }
 }
@@ -581,12 +870,36 @@ pub fn print_chunk_results(result: &ChunkProcessingResult, headers: &[String]) {
     } else {
         println!("No white space only values found in this chunk");
     }
+
+    // Digits only values
+    if !result.digits_only_counts.is_empty() {
+        println!("Digits Only values:");
+        for (col, count) in result
+            .digits_only_counts
+            .iter()
+            .filter(|(_, &count)| count > 0)
+        {
+            let header_name = if *col < headers.len() {
+                &headers[*col]
+            } else {
+                "Unknown Column"
+            };
+
+            println!(
+                "   col_{} column_name={}: {} digits only values",
+                col, header_name, count
+            );
+        }
+    } else {
+        println!("No digits only values found in this chunk");
+    }
 }
 
 type QualityMetrics = (
+    HashMap<usize, usize>, // null_counts
     HashMap<usize, usize>, // empty_counts
     HashMap<usize, usize>, // whitespace_counts
-    HashMap<usize, usize>, // null_counts
+    HashMap<usize, usize>, // placeholder_counts
     usize,                 // total_rows
 );
 
@@ -595,6 +908,7 @@ pub fn aggregate_results(results: &[ChunkProcessingResult]) -> QualityMetrics {
     let mut total_null_counts = HashMap::new();
     let mut total_empty_counts = HashMap::new();
     let mut total_whitespace_counts = HashMap::new();
+    let mut total_placeholder_counts = HashMap::new();
     let mut total_rows = 0;
 
     for result in results {
@@ -609,12 +923,16 @@ pub fn aggregate_results(results: &[ChunkProcessingResult]) -> QualityMetrics {
         for (col, count) in &result.whitespace_counts {
             *total_whitespace_counts.entry(*col).or_insert(0) += count;
         }
+        for (col, count) in &result.placeholder_counts {
+            *total_placeholder_counts.entry(*col).or_insert(0) += count;
+        }
     }
 
     (
         total_null_counts,
         total_empty_counts,
         total_whitespace_counts,
+        total_placeholder_counts,
         total_rows,
     )
 }

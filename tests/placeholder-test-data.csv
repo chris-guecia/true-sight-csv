@@ -1,0 +1,7 @@
+name,status,notes,category
+Alice,active,Great customer,retail
+Bob,TBD,TODO,wholesale
+Carol,UNKNOWN,PLACEHOLDER,retail
+Dave,todo,tbd,wholesale
+Eve,active,unknown,retail
+Frank,placeholder,active,wholesale

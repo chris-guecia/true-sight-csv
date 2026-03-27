@@ -51,6 +51,18 @@ impl SparkStyleFormatter {
         output.push_str(
             &self.format_issues_table(results, headers, "Whitespace", |r| &r.whitespace_counts),
         );
+        output.push('\n');
+        output.push_str(
+            &self.format_issues_table(results, headers, "Placeholder", |r| &r.placeholder_counts),
+        );
+        output.push('\n');
+        output.push_str(
+            &self.format_issues_table(results, headers, "Digits-Only", |r| &r.digits_only_counts),
+        );
+        output.push('\n');
+        output.push_str(
+            &self.format_issues_table(results, headers, "Dash-Only", |r| &r.dash_only_counts),
+        );
 
         output
     }
@@ -77,6 +89,18 @@ impl SparkStyleFormatter {
         let total_whitespace: usize = results
             .iter()
             .map(|r| r.whitespace_counts.values().sum::<usize>())
+            .sum();
+        let total_placeholder: usize = results
+            .iter()
+            .map(|r| r.placeholder_counts.values().sum::<usize>())
+            .sum();
+        let total_digits_only: usize = results
+            .iter()
+            .map(|r| r.digits_only_counts.values().sum::<usize>())
+            .sum();
+        let total_dash_only: usize = results
+            .iter()
+            .map(|r| r.dash_only_counts.values().sum::<usize>())
             .sum();
 
         let total_cells = total_rows * headers.len();
@@ -139,6 +163,42 @@ impl SparkStyleFormatter {
                     }
                 ),
             ],
+            vec![
+                "Placeholder Values".to_string(),
+                total_placeholder.to_string(),
+                format!(
+                    "{:.3}%",
+                    if total_cells > 0 {
+                        (total_placeholder as f64 / total_cells as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            ],
+            vec![
+                "Digits-Only Values".to_string(),
+                total_digits_only.to_string(),
+                format!(
+                    "{:.3}%",
+                    if total_cells > 0 {
+                        (total_digits_only as f64 / total_cells as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            ],
+            vec![
+                "Dash-Only Values".to_string(),
+                total_dash_only.to_string(),
+                format!(
+                    "{:.3}%",
+                    if total_cells > 0 {
+                        (total_dash_only as f64 / total_cells as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            ],
         ];
 
         output.push_str("=== PROCESSING SUMMARY ===\n");
@@ -165,6 +225,9 @@ impl SparkStyleFormatter {
         let mut total_null_counts = HashMap::new();
         let mut total_empty_counts = HashMap::new();
         let mut total_whitespace_counts = HashMap::new();
+        let mut total_placeholder_counts = HashMap::new();
+        let mut total_dash_only_counts = HashMap::new();
+        let mut total_digits_only_counts = HashMap::new();
 
         for result in results {
             for (col, count) in &result.null_counts {
@@ -175,6 +238,15 @@ impl SparkStyleFormatter {
             }
             for (col, count) in &result.whitespace_counts {
                 *total_whitespace_counts.entry(*col).or_insert(0) += count;
+            }
+            for (col, count) in &result.placeholder_counts {
+                *total_placeholder_counts.entry(*col).or_insert(0) += count;
+            }
+            for (col, count) in &result.dash_only_counts {
+                *total_dash_only_counts.entry(*col).or_insert(0) += count;
+            }
+            for (col, count) in &result.digits_only_counts {
+                *total_digits_only_counts.entry(*col).or_insert(0) += count;
             }
         }
 
@@ -190,6 +262,12 @@ impl SparkStyleFormatter {
             "Empty % of Column".to_string(),
             "Whitespace Count".to_string(),
             "Whitespace % of Column".to_string(),
+            "Placeholder Count".to_string(),
+            "Placeholder % of Column".to_string(),
+            "Dash-Only Count".to_string(),
+            "Dash-Only % of Column".to_string(),
+            "Digits-Only Count".to_string(),
+            "Digits-Only % of Column".to_string(),
         ];
 
         let mut rows = Vec::new();
@@ -201,6 +279,9 @@ impl SparkStyleFormatter {
             let null_count = total_null_counts.get(&col_idx).copied().unwrap_or(0);
             let empty_count = total_empty_counts.get(&col_idx).copied().unwrap_or(0);
             let whitespace_count = total_whitespace_counts.get(&col_idx).copied().unwrap_or(0);
+            let placeholder_count = total_placeholder_counts.get(&col_idx).copied().unwrap_or(0);
+            let dash_only_count = total_dash_only_counts.get(&col_idx).copied().unwrap_or(0);
+            let digits_only_count = total_digits_only_counts.get(&col_idx).copied().unwrap_or(0);
 
             // Calculate percentage of this column's cells (not all rows)
             let null_percentage = if total_rows > 0 {
@@ -218,6 +299,21 @@ impl SparkStyleFormatter {
             } else {
                 0.0
             };
+            let placeholder_percentage = if total_rows > 0 {
+                (placeholder_count as f64 / total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+            let dash_only_percentage = if total_rows > 0 {
+                (dash_only_count as f64 / total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+            let digits_only_percentage = if total_rows > 0 {
+                (digits_only_count as f64 / total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
 
             rows.push(vec![
                 col_idx.to_string(),
@@ -228,6 +324,12 @@ impl SparkStyleFormatter {
                 format!("{:.1}%", empty_percentage),
                 whitespace_count.to_string(),
                 format!("{:.1}%", whitespace_percentage),
+                placeholder_count.to_string(),
+                format!("{:.1}%", placeholder_percentage),
+                dash_only_count.to_string(),
+                format!("{:.1}%", dash_only_percentage),
+                digits_only_count.to_string(),
+                format!("{:.1}%", digits_only_percentage),
             ]);
         }
 
@@ -545,6 +647,9 @@ mod tests {
             null_counts: [(0, 5), (1, 15)].into_iter().collect(), // 20 total nulls
             empty_counts: [(0, 10), (1, 30), (2, 60)].into_iter().collect(), // 100 total empty
             whitespace_counts: [(0, 2)].into_iter().collect(),    // 2 total whitespace
+            digits_only_counts: HashMap::new(),
+            placeholder_counts: HashMap::new(),
+            dash_only_counts: HashMap::new(),
         }];
 
         let headers = vec!["col1".to_string(), "col2".to_string(), "col3".to_string()];
@@ -583,6 +688,9 @@ mod tests {
             .into_iter()
             .collect(), // 2400 total empty values
             whitespace_counts: HashMap::new(),
+            digits_only_counts: HashMap::new(),
+            placeholder_counts: HashMap::new(),
+            dash_only_counts: HashMap::new(),
         }];
 
         let headers = vec!["col1".to_string(), "col2".to_string(), "col3".to_string()];

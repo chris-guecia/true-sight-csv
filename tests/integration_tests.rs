@@ -1,8 +1,9 @@
 use std::fs::File;
 use std::path::PathBuf;
 use true_sight_csv::{
-    prepare_csv_reader, process_csv_chunks, CsvChunkIterator, EmptyCheck, NullLikeCheck,
-    PatternCheck, ProcessingConfig, WhiteSpaceOnlyCheck,
+    prepare_csv_reader, process_csv_chunks, CsvChunkIterator, DashOnlyCheck, DigitsOnlyCheck,
+    EmptyCheck, NullLikeCheck, PatternCheck, PlaceholderCheck, ProcessingConfig,
+    WhiteSpaceOnlyCheck,
 };
 
 // Helper function to get the path to a fixture file
@@ -163,6 +164,79 @@ fn test_csv_chunk_iterator_edge_cases() {
 }
 
 #[test]
+fn test_placeholder_check_patterns() {
+    let check = PlaceholderCheck::new();
+    assert!(check.check("TBD"));
+    assert!(check.check("tbd"));
+    assert!(check.check("TODO"));
+    assert!(check.check("todo"));
+    assert!(check.check("PLACEHOLDER"));
+    assert!(check.check("placeholder"));
+    assert!(check.check("UNKNOWN"));
+    assert!(check.check("unknown"));
+    assert!(check.check("  TBD  "));
+    assert!(!check.check(""));
+    assert!(!check.check("some value"));
+    assert!(!check.check("NULL"));
+}
+
+#[test]
+fn test_placeholder_check_detected_in_csv() {
+    let test_path = get_fixture_path("placeholder-test-data.csv");
+
+    let (_found_headers, mut rdr) = prepare_csv_reader(&test_path).unwrap();
+
+    let chunk_size = 10;
+    let config = ProcessingConfig {
+        chunk_size,
+        enable_parallel: false,
+    };
+    let chunk_iterator = CsvChunkIterator::new(rdr.records(), chunk_size);
+
+    let results = process_csv_chunks(chunk_iterator, config).unwrap();
+
+    // placeholder-test-data.csv has 6 data rows:
+    //   Alice: status=active,            notes=Great customer  -> 0 placeholders
+    //   Bob:   status=TBD (col 1),       notes=TODO (col 2)    -> 2 placeholders
+    //   Carol: status=UNKNOWN (col 1),   notes=PLACEHOLDER (col 2) -> 2 placeholders
+    //   Dave:  status=todo (col 1),      notes=tbd (col 2)     -> 2 placeholders
+    //   Eve:   status=active,            notes=unknown (col 2) -> 1 placeholder
+    //   Frank: status=placeholder (col 1), notes=active        -> 1 placeholder
+    // Total = 8 placeholder hits
+
+    let total_placeholder_found: usize = results
+        .iter()
+        .map(|r| r.placeholder_counts.values().sum::<usize>())
+        .sum();
+
+    assert_eq!(
+        total_placeholder_found, 8,
+        "Expected 8 placeholder values in placeholder-test-data.csv, found {}",
+        total_placeholder_found
+    );
+
+    // col 1 (status): TBD, UNKNOWN, todo, placeholder = 4
+    let col1_placeholder: usize = results
+        .iter()
+        .map(|r| r.placeholder_counts.get(&1).copied().unwrap_or(0))
+        .sum();
+    assert_eq!(
+        col1_placeholder, 4,
+        "Expected 4 placeholder values in 'status' column"
+    );
+
+    // col 2 (notes): TODO, PLACEHOLDER, tbd, unknown = 4
+    let col2_placeholder: usize = results
+        .iter()
+        .map(|r| r.placeholder_counts.get(&2).copied().unwrap_or(0))
+        .sum();
+    assert_eq!(
+        col2_placeholder, 4,
+        "Expected 4 placeholder values in 'notes' column"
+    );
+}
+
+#[test]
 fn test_process_csv_chunks() {
     let test_path = get_fixture_path("sample-warehouse-data.csv");
 
@@ -205,5 +279,111 @@ fn test_process_csv_chunks() {
     assert!(
         total_null_found == 15,
         "Should find 15 NULL-like values in test CSV"
+    );
+}
+
+#[test]
+fn test_digits_only_check_basic() {
+    let check = DigitsOnlyCheck::new();
+
+    // Positive cases: fields that are entirely digits
+    assert!(check.check("12345"), "Pure digit string should match");
+    assert!(check.check("0"), "Single zero should match");
+    assert!(check.check("9999"), "All nines should match");
+
+    // Negative cases
+    assert!(!check.check(""), "Empty string should not match");
+    assert!(!check.check("12.34"), "Float with decimal should not match");
+    assert!(!check.check("12 34"), "Digits with space should not match");
+    assert!(!check.check("abc"), "Letters only should not match");
+    assert!(!check.check("1a2"), "Mixed alphanum should not match");
+    assert!(!check.check("-5"), "Negative number should not match");
+}
+
+#[test]
+fn test_digits_only_check_trait_metadata() {
+    let check = DigitsOnlyCheck::new();
+    assert_eq!(check.name(), "DigitsOnlyCheck");
+    assert_eq!(
+        check.show_check_pattern(),
+        "Fields containing only digit characters (0-9)"
+    );
+}
+
+#[test]
+fn test_process_csv_chunks_digits_only_counts() {
+    let test_path = get_fixture_path("sample-warehouse-data.csv");
+
+    let (_found_headers, mut rdr) = prepare_csv_reader(&test_path).unwrap();
+    let chunk_size = 3;
+
+    let config = ProcessingConfig {
+        chunk_size,
+        enable_parallel: false,
+    };
+    let chunk_iterator = CsvChunkIterator::new(rdr.records(), chunk_size);
+
+    let results = process_csv_chunks(chunk_iterator, config).unwrap();
+
+    // The sample CSV has digits-only values in customer_id (col 0), quantity (col 3),
+    // and shipping_zip (col 5) for the first several rows.
+    // Rows 1-6 contribute 3 each (col0, col3, col5), row 7 contributes 1 (col5 only).
+    // Total expected: 3*6 + 1 = 19 digits-only field occurrences.
+    let total_digits_only_found: usize = results
+        .iter()
+        .map(|r| r.digits_only_counts.values().sum::<usize>())
+        .sum();
+    assert_eq!(
+        total_digits_only_found, 19,
+        "Should find 19 digits-only field occurrences in test CSV"
+    );
+
+    // The first chunk (rows 1-3) should have digits-only hits in col 0, col 3, col 5
+    assert!(
+        results[0].digits_only_counts.contains_key(&0),
+        "First chunk should have digits-only values in column 0 (customer_id)"
+    );
+    assert!(
+        results[0].digits_only_counts.contains_key(&3),
+        "First chunk should have digits-only values in column 3 (quantity)"
+    );
+    assert!(
+        results[0].digits_only_counts.contains_key(&5),
+        "First chunk should have digits-only values in column 5 (shipping_zip)"
+    );
+}
+
+#[test]
+fn test_dash_only_check_basic() {
+    let check = DashOnlyCheck::new();
+
+    // Positive cases
+    assert!(check.check("-"), "Single dash should match");
+    assert!(check.check("--"), "Double dash should match");
+    assert!(
+        check.check("  -  "),
+        "Single dash with whitespace should match"
+    );
+    assert!(
+        check.check("  --  "),
+        "Double dash with whitespace should match"
+    );
+
+    // Negative cases
+    assert!(!check.check(""), "Empty string should not match");
+    assert!(!check.check("---"), "Triple dash should not match");
+    assert!(!check.check("-a"), "Dash with letter should not match");
+    assert!(!check.check("a-b"), "Dash between letters should not match");
+    assert!(!check.check("some value"), "Regular value should not match");
+    assert!(!check.check("N/A"), "N/A should not match");
+}
+
+#[test]
+fn test_dash_only_check_trait_metadata() {
+    let check = DashOnlyCheck::new();
+    assert_eq!(check.name(), "DASH_ONLY");
+    assert_eq!(
+        check.show_check_pattern(),
+        "Fields whose trimmed value is '-' or '--'"
     );
 }
