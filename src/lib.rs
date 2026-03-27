@@ -5,8 +5,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
+
 use std::time::Duration;
 
 pub mod formatter; // Add this line to declare the module
@@ -691,6 +690,47 @@ impl CsvAggregator {
     }
 }
 
+// Owned per-record result — no shared state, no locking
+#[derive(Debug, Default)]
+struct RecordResult {
+    null_counts: HashMap<usize, usize>,
+    empty_counts: HashMap<usize, usize>,
+    whitespace_counts: HashMap<usize, usize>,
+    digits_only_counts: HashMap<usize, usize>,
+    placeholder_counts: HashMap<usize, usize>,
+    dash_only_counts: HashMap<usize, usize>,
+    rows_processed: usize,
+}
+
+impl RecordResult {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.rows_processed += other.rows_processed;
+        for (col, count) in other.null_counts {
+            *self.null_counts.entry(col).or_insert(0) += count;
+        }
+        for (col, count) in other.empty_counts {
+            *self.empty_counts.entry(col).or_insert(0) += count;
+        }
+        for (col, count) in other.whitespace_counts {
+            *self.whitespace_counts.entry(col).or_insert(0) += count;
+        }
+        for (col, count) in other.digits_only_counts {
+            *self.digits_only_counts.entry(col).or_insert(0) += count;
+        }
+        for (col, count) in other.placeholder_counts {
+            *self.placeholder_counts.entry(col).or_insert(0) += count;
+        }
+        for (col, count) in other.dash_only_counts {
+            *self.dash_only_counts.entry(col).or_insert(0) += count;
+        }
+        self
+    }
+}
+
 // Struct to hold processing results for a single chunk
 #[derive(Debug, Clone)]
 pub struct ChunkProcessingResult {
@@ -724,12 +764,13 @@ pub fn process_csv_chunks<R: Read>(
     chunk_iterator: CsvChunkIterator<'_, R>,
     config: ProcessingConfig,
 ) -> Result<Vec<ChunkProcessingResult>, Box<dyn std::error::Error>> {
-    let null_check = Arc::new(NullLikeCheck::new());
-    let empty_check = Arc::new(EmptyCheck::new());
-    let white_space_only_check = Arc::new(WhiteSpaceOnlyCheck::new());
-    let digits_only_check = Arc::new(DigitsOnlyCheck::new());
-    let placeholder_check = Arc::new(PlaceholderCheck::new());
-    let dash_only_check = Arc::new(DashOnlyCheck::new());
+    // Checks are stateless and Send+Sync — share by reference, no Arc needed
+    let null_check = NullLikeCheck::new();
+    let empty_check = EmptyCheck::new();
+    let whitespace_check = WhiteSpaceOnlyCheck::new();
+    let digits_only_check = DigitsOnlyCheck::new();
+    let placeholder_check = PlaceholderCheck::new();
+    let dash_only_check = DashOnlyCheck::new();
 
     let mut results = Vec::new();
     let mut chunk_number = 0;
@@ -738,195 +779,121 @@ pub fn process_csv_chunks<R: Read>(
         match chunk {
             Ok(records) => {
                 chunk_number += 1;
-
                 let result = process_single_chunk(
                     &records,
                     chunk_number,
                     &null_check,
                     &empty_check,
-                    &white_space_only_check,
+                    &whitespace_check,
                     &digits_only_check,
                     &placeholder_check,
                     &dash_only_check,
                     config.enable_parallel,
                 )?;
-
                 results.push(result);
             }
-            Err(e) => {
-                return Err(Box::new(e));
-            }
+            Err(e) => return Err(Box::new(e)),
         }
     }
 
     Ok(results)
 }
 
-// Process a single chunk
+// Process a single record — pure function, returns owned result, no shared state
+fn process_record_owned(
+    record: &csv::StringRecord,
+    null_check: &NullLikeCheck,
+    empty_check: &EmptyCheck,
+    whitespace_check: &WhiteSpaceOnlyCheck,
+    digits_only_check: &DigitsOnlyCheck,
+    placeholder_check: &PlaceholderCheck,
+    dash_only_check: &DashOnlyCheck,
+) -> RecordResult {
+    let mut result = RecordResult {
+        rows_processed: 1,
+        ..Default::default()
+    };
+
+    for (i, field) in record.iter().enumerate() {
+        if null_check.check(field) {
+            *result.null_counts.entry(i).or_insert(0) += 1;
+        }
+        if empty_check.check(field) {
+            *result.empty_counts.entry(i).or_insert(0) += 1;
+        }
+        if whitespace_check.check(field) {
+            *result.whitespace_counts.entry(i).or_insert(0) += 1;
+        }
+        if digits_only_check.check(field) {
+            *result.digits_only_counts.entry(i).or_insert(0) += 1;
+        }
+        if placeholder_check.check(field) {
+            *result.placeholder_counts.entry(i).or_insert(0) += 1;
+        }
+        if dash_only_check.check(field) {
+            *result.dash_only_counts.entry(i).or_insert(0) += 1;
+        }
+    }
+
+    result
+}
+
+// Process a single chunk using ownership + fold/reduce — zero locks during processing
 #[allow(clippy::too_many_arguments)]
 pub fn process_single_chunk(
     records: &[csv::StringRecord],
     chunk_number: usize,
-    null_check: &Arc<NullLikeCheck>,
-    empty_check: &Arc<EmptyCheck>,
-    whitespace_check: &Arc<WhiteSpaceOnlyCheck>,
-    digits_only_check: &Arc<DigitsOnlyCheck>,
-    placeholder_check: &Arc<PlaceholderCheck>,
-    dash_only_check: &Arc<DashOnlyCheck>,
+    null_check: &NullLikeCheck,
+    empty_check: &EmptyCheck,
+    whitespace_check: &WhiteSpaceOnlyCheck,
+    digits_only_check: &DigitsOnlyCheck,
+    placeholder_check: &PlaceholderCheck,
+    dash_only_check: &DashOnlyCheck,
     enable_parallel: bool,
 ) -> Result<ChunkProcessingResult, Box<dyn std::error::Error>> {
-    let null_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
-    let empty_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
-    let whitespace_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
-    let digits_only_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
-    let placeholder_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
-    let dash_only_counters = Arc::new(Mutex::new(HashMap::<usize, usize>::new()));
-
-    if enable_parallel {
-        records.par_iter().for_each(|record| {
-            process_record(
-                record,
-                &null_counters,
-                &empty_counters,
-                &whitespace_counters,
-                &digits_only_counters,
-                &placeholder_counters,
-                &dash_only_counters,
-                null_check,
-                empty_check,
-                whitespace_check,
-                digits_only_check,
-                placeholder_check,
-                dash_only_check,
-            );
-        });
+    let combined = if enable_parallel {
+        // Each Rayon thread owns its fold accumulator; merge happens once at the end
+        records
+            .par_iter()
+            .map(|record| {
+                process_record_owned(
+                    record,
+                    null_check,
+                    empty_check,
+                    whitespace_check,
+                    digits_only_check,
+                    placeholder_check,
+                    dash_only_check,
+                )
+            })
+            .reduce(RecordResult::new, RecordResult::merge)
     } else {
-        records.iter().for_each(|record| {
-            process_record(
-                record,
-                &null_counters,
-                &empty_counters,
-                &whitespace_counters,
-                &digits_only_counters,
-                &placeholder_counters,
-                &dash_only_counters,
-                null_check,
-                empty_check,
-                whitespace_check,
-                digits_only_check,
-                placeholder_check,
-                dash_only_check,
-            );
-        });
-    }
-
-    // Extract results from Arc<Mutex<>>
-    let null_counts = null_counters.lock().unwrap().clone();
-    let empty_counts = empty_counters.lock().unwrap().clone();
-    let whitespace_counts = whitespace_counters.lock().unwrap().clone();
-    let digits_only_counts = digits_only_counters.lock().unwrap().clone();
-    let placeholder_counts = placeholder_counters.lock().unwrap().clone();
-    let dash_only_counts = dash_only_counters.lock().unwrap().clone();
+        records
+            .iter()
+            .map(|record| {
+                process_record_owned(
+                    record,
+                    null_check,
+                    empty_check,
+                    whitespace_check,
+                    digits_only_check,
+                    placeholder_check,
+                    dash_only_check,
+                )
+            })
+            .fold(RecordResult::new(), RecordResult::merge)
+    };
 
     Ok(ChunkProcessingResult {
         chunk_number,
-        rows_processed: records.len(),
-        null_counts,
-        empty_counts,
-        whitespace_counts,
-        digits_only_counts,
-        placeholder_counts,
-        dash_only_counts,
+        rows_processed: combined.rows_processed,
+        null_counts: combined.null_counts,
+        empty_counts: combined.empty_counts,
+        whitespace_counts: combined.whitespace_counts,
+        digits_only_counts: combined.digits_only_counts,
+        placeholder_counts: combined.placeholder_counts,
+        dash_only_counts: combined.dash_only_counts,
     })
-}
-
-// Process a single record - the core logic
-#[allow(clippy::too_many_arguments)]
-fn process_record(
-    record: &csv::StringRecord,
-    null_counters: &Arc<Mutex<HashMap<usize, usize>>>,
-    empty_counters: &Arc<Mutex<HashMap<usize, usize>>>,
-    whitespace_counters: &Arc<Mutex<HashMap<usize, usize>>>,
-    digits_only_counters: &Arc<Mutex<HashMap<usize, usize>>>,
-    placeholder_counters: &Arc<Mutex<HashMap<usize, usize>>>,
-    dash_only_counters: &Arc<Mutex<HashMap<usize, usize>>>,
-    null_check: &Arc<NullLikeCheck>,
-    empty_check: &Arc<EmptyCheck>,
-    whitespace_check: &Arc<WhiteSpaceOnlyCheck>,
-    digits_only_check: &Arc<DigitsOnlyCheck>,
-    placeholder_check: &Arc<PlaceholderCheck>,
-    dash_only_check: &Arc<DashOnlyCheck>,
-) {
-    let mut local_null_findings = Vec::new();
-    let mut local_empty_findings = Vec::new();
-    let mut local_whitespace_findings = Vec::new();
-    let mut local_digits_only_findings = Vec::new();
-    let mut local_placeholder_findings = Vec::new();
-    let mut local_dash_only_findings = Vec::new();
-
-    for (i, field) in record.iter().enumerate() {
-        if null_check.check(field) {
-            local_null_findings.push(i);
-        }
-        if empty_check.check(field) {
-            local_empty_findings.push(i);
-        }
-        if whitespace_check.check(field) {
-            local_whitespace_findings.push(i);
-        }
-        if digits_only_check.check(field) {
-            local_digits_only_findings.push(i);
-        }
-        if placeholder_check.check(field) {
-            local_placeholder_findings.push(i);
-        }
-        if dash_only_check.check(field) {
-            local_dash_only_findings.push(i);
-        }
-    }
-
-    // Update counters
-    if !local_null_findings.is_empty() {
-        let mut null_map = null_counters.lock().unwrap();
-        for col in local_null_findings {
-            *null_map.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    if !local_empty_findings.is_empty() {
-        let mut empty_map = empty_counters.lock().unwrap();
-        for col in local_empty_findings {
-            *empty_map.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    if !local_whitespace_findings.is_empty() {
-        let mut whitespace_map = whitespace_counters.lock().unwrap();
-        for col in local_whitespace_findings {
-            *whitespace_map.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    if !local_digits_only_findings.is_empty() {
-        let mut digits_only_map = digits_only_counters.lock().unwrap();
-        for col in local_digits_only_findings {
-            *digits_only_map.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    if !local_placeholder_findings.is_empty() {
-        let mut placeholder_map = placeholder_counters.lock().unwrap();
-        for col in local_placeholder_findings {
-            *placeholder_map.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    if !local_dash_only_findings.is_empty() {
-        let mut dash_only_map = dash_only_counters.lock().unwrap();
-        for col in local_dash_only_findings {
-            *dash_only_map.entry(col).or_insert(0) += 1;
-        }
-    }
 }
 
 // Print results function
