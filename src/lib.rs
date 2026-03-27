@@ -707,6 +707,41 @@ impl RecordResult {
         Self::default()
     }
 
+    /// Accumulate a single record directly into this accumulator — no new allocation.
+    #[allow(clippy::too_many_arguments)]
+    fn merge_record(
+        &mut self,
+        record: &csv::StringRecord,
+        null_check: &NullLikeCheck,
+        empty_check: &EmptyCheck,
+        whitespace_check: &WhiteSpaceOnlyCheck,
+        digits_only_check: &DigitsOnlyCheck,
+        placeholder_check: &PlaceholderCheck,
+        dash_only_check: &DashOnlyCheck,
+    ) {
+        self.rows_processed += 1;
+        for (i, field) in record.iter().enumerate() {
+            if null_check.check(field) {
+                *self.null_counts.entry(i).or_insert(0) += 1;
+            }
+            if empty_check.check(field) {
+                *self.empty_counts.entry(i).or_insert(0) += 1;
+            }
+            if whitespace_check.check(field) {
+                *self.whitespace_counts.entry(i).or_insert(0) += 1;
+            }
+            if digits_only_check.check(field) {
+                *self.digits_only_counts.entry(i).or_insert(0) += 1;
+            }
+            if placeholder_check.check(field) {
+                *self.placeholder_counts.entry(i).or_insert(0) += 1;
+            }
+            if dash_only_check.check(field) {
+                *self.dash_only_counts.entry(i).or_insert(0) += 1;
+            }
+        }
+    }
+
     fn merge(mut self, other: Self) -> Self {
         self.rows_processed += other.rows_processed;
         for (col, count) in other.null_counts {
@@ -799,45 +834,6 @@ pub fn process_csv_chunks<R: Read>(
     Ok(results)
 }
 
-// Process a single record — pure function, returns owned result, no shared state
-fn process_record_owned(
-    record: &csv::StringRecord,
-    null_check: &NullLikeCheck,
-    empty_check: &EmptyCheck,
-    whitespace_check: &WhiteSpaceOnlyCheck,
-    digits_only_check: &DigitsOnlyCheck,
-    placeholder_check: &PlaceholderCheck,
-    dash_only_check: &DashOnlyCheck,
-) -> RecordResult {
-    let mut result = RecordResult {
-        rows_processed: 1,
-        ..Default::default()
-    };
-
-    for (i, field) in record.iter().enumerate() {
-        if null_check.check(field) {
-            *result.null_counts.entry(i).or_insert(0) += 1;
-        }
-        if empty_check.check(field) {
-            *result.empty_counts.entry(i).or_insert(0) += 1;
-        }
-        if whitespace_check.check(field) {
-            *result.whitespace_counts.entry(i).or_insert(0) += 1;
-        }
-        if digits_only_check.check(field) {
-            *result.digits_only_counts.entry(i).or_insert(0) += 1;
-        }
-        if placeholder_check.check(field) {
-            *result.placeholder_counts.entry(i).or_insert(0) += 1;
-        }
-        if dash_only_check.check(field) {
-            *result.dash_only_counts.entry(i).or_insert(0) += 1;
-        }
-    }
-
-    result
-}
-
 // Process a single chunk using ownership + fold/reduce — zero locks during processing
 #[allow(clippy::too_many_arguments)]
 pub fn process_single_chunk(
@@ -852,11 +848,12 @@ pub fn process_single_chunk(
     enable_parallel: bool,
 ) -> Result<ChunkProcessingResult, Box<dyn std::error::Error>> {
     let combined = if enable_parallel {
-        // Each Rayon thread owns its fold accumulator; merge happens once at the end
+        // fold: each Rayon thread owns one local accumulator (no locking)
+        // reduce: merges only N_threads accumulators once at the end
         records
             .par_iter()
-            .map(|record| {
-                process_record_owned(
+            .fold(RecordResult::new, |mut acc, record| {
+                acc.merge_record(
                     record,
                     null_check,
                     empty_check,
@@ -864,24 +861,23 @@ pub fn process_single_chunk(
                     digits_only_check,
                     placeholder_check,
                     dash_only_check,
-                )
+                );
+                acc
             })
             .reduce(RecordResult::new, RecordResult::merge)
     } else {
-        records
-            .iter()
-            .map(|record| {
-                process_record_owned(
-                    record,
-                    null_check,
-                    empty_check,
-                    whitespace_check,
-                    digits_only_check,
-                    placeholder_check,
-                    dash_only_check,
-                )
-            })
-            .fold(RecordResult::new(), RecordResult::merge)
+        records.iter().fold(RecordResult::new(), |mut acc, record| {
+            acc.merge_record(
+                record,
+                null_check,
+                empty_check,
+                whitespace_check,
+                digits_only_check,
+                placeholder_check,
+                dash_only_check,
+            );
+            acc
+        })
     };
 
     Ok(ChunkProcessingResult {
