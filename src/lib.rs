@@ -429,6 +429,122 @@ fn test_placeholder_check() {
     assert!(!check.check("NULL"));
 }
 
+// Boolean-Like Values Check Strategy
+pub struct BooleanLikeCheck;
+
+impl Default for BooleanLikeCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BooleanLikeCheck {
+    pub const BOOLEAN_LIKE_VALUES: [&'static str; 8] =
+        ["true", "false", "yes", "no", "1", "0", "on", "off"];
+
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl PatternCheck for BooleanLikeCheck {
+    fn name(&self) -> &str {
+        "BOOLEAN_LIKE"
+    }
+
+    fn check(&self, value: &str) -> bool {
+        let trimmed = value.trim();
+        Self::BOOLEAN_LIKE_VALUES
+            .iter()
+            .any(|&b| trimmed.eq_ignore_ascii_case(b))
+    }
+
+    fn show_check_pattern(&self) -> &str {
+        "true, false, yes, no, 1, 0, on, off (case-insensitive)"
+    }
+}
+
+#[test]
+fn test_boolean_like_check() {
+    let check = BooleanLikeCheck::new();
+    // positive cases
+    assert!(check.check("true"));
+    assert!(check.check("True"));
+    assert!(check.check("TRUE"));
+    assert!(check.check("false"));
+    assert!(check.check("FALSE"));
+    assert!(check.check("yes"));
+    assert!(check.check("YES"));
+    assert!(check.check("no"));
+    assert!(check.check("NO"));
+    assert!(check.check("1"));
+    assert!(check.check("0"));
+    assert!(check.check("on"));
+    assert!(check.check("ON"));
+    assert!(check.check("off"));
+    assert!(check.check("OFF"));
+    assert!(check.check("  true  "));
+    // negative cases
+    assert!(!check.check(""));
+    assert!(!check.check("maybe"));
+    assert!(!check.check("11"));
+    assert!(!check.check("truee"));
+    assert_eq!(check.name(), "BOOLEAN_LIKE");
+}
+
+// Special-Char-Only Values Check Strategy
+pub struct SpecialCharOnlyCheck;
+
+impl Default for SpecialCharOnlyCheck {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SpecialCharOnlyCheck {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl PatternCheck for SpecialCharOnlyCheck {
+    fn name(&self) -> &str {
+        "SPECIAL_CHAR_ONLY"
+    }
+
+    fn check(&self, value: &str) -> bool {
+        !value.trim().is_empty()
+            && value
+                .trim()
+                .chars()
+                .all(|c| !c.is_alphanumeric() && !c.is_whitespace())
+    }
+
+    fn show_check_pattern(&self) -> &str {
+        "Fields containing only non-alphanumeric, non-whitespace characters (e.g. ???, !!!!, ###)"
+    }
+}
+
+#[test]
+fn test_special_char_only_check() {
+    let check = SpecialCharOnlyCheck::new();
+    // positive cases
+    assert!(check.check("???"));
+    assert!(check.check("!!!!"));
+    assert!(check.check("###"));
+    assert!(check.check("***"));
+    assert!(check.check("  !!!  "));
+    assert!(check.check("@#$%"));
+    // negative cases
+    assert!(!check.check(""));
+    assert!(!check.check("   "));
+    assert!(!check.check("abc"));
+    assert!(!check.check("123"));
+    assert!(!check.check("a!b"));
+    assert!(!check.check("!a"));
+    assert_eq!(check.name(), "SPECIAL_CHAR_ONLY");
+}
+
 // NULL Like Values Check Strategy
 pub struct NullLikeCheck;
 
@@ -472,6 +588,8 @@ pub struct ColumnStats {
     digits_only_count: usize,
     placeholder_count: usize,
     dash_only_count: usize,
+    boolean_like_count: usize,
+    special_char_only_count: usize,
 }
 
 #[derive(Clone)]
@@ -495,6 +613,8 @@ impl CsvAggregator {
                 digits_only_count: 0,
                 placeholder_count: 0,
                 dash_only_count: 0,
+                boolean_like_count: 0,
+                special_char_only_count: 0,
             };
             column_count
         ];
@@ -518,6 +638,8 @@ impl CsvAggregator {
         digits_only_map: &HashMap<usize, usize>,
         placeholder_map: &HashMap<usize, usize>,
         dash_only_map: &HashMap<usize, usize>,
+        boolean_like_map: &HashMap<usize, usize>,
+        special_char_only_map: &HashMap<usize, usize>,
         chunk_size: usize,
     ) {
         // Update total row count
@@ -562,6 +684,20 @@ impl CsvAggregator {
         for (&col, &count) in dash_only_map.iter() {
             if col < self.column_stats.len() {
                 self.column_stats[col].dash_only_count += count;
+            }
+        }
+
+        // Update boolean_like_map counts
+        for (&col, &count) in boolean_like_map.iter() {
+            if col < self.column_stats.len() {
+                self.column_stats[col].boolean_like_count += count;
+            }
+        }
+
+        // Update special_char_only_map counts
+        for (&col, &count) in special_char_only_map.iter() {
+            if col < self.column_stats.len() {
+                self.column_stats[col].special_char_only_count += count;
             }
         }
     }
@@ -683,6 +819,28 @@ impl CsvAggregator {
                 stats.dash_only_count, dash_only_percent
             ));
 
+            let boolean_like_percent = if self.total_rows > 0 {
+                (stats.boolean_like_count as f64 / self.total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            report.push_str(&format!(
+                "  Boolean-Like values: {} ({:.2}%)\n",
+                stats.boolean_like_count, boolean_like_percent
+            ));
+
+            let special_char_only_percent = if self.total_rows > 0 {
+                (stats.special_char_only_count as f64 / self.total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            report.push_str(&format!(
+                "  Special-Char-Only values: {} ({:.2}%)\n",
+                stats.special_char_only_count, special_char_only_percent
+            ));
+
             report.push('\n');
         }
 
@@ -699,6 +857,8 @@ struct RecordResult {
     digits_only_counts: HashMap<usize, usize>,
     placeholder_counts: HashMap<usize, usize>,
     dash_only_counts: HashMap<usize, usize>,
+    boolean_like_counts: HashMap<usize, usize>,
+    special_char_only_counts: HashMap<usize, usize>,
     rows_processed: usize,
 }
 
@@ -718,6 +878,8 @@ impl RecordResult {
         digits_only_check: &DigitsOnlyCheck,
         placeholder_check: &PlaceholderCheck,
         dash_only_check: &DashOnlyCheck,
+        boolean_like_check: &BooleanLikeCheck,
+        special_char_only_check: &SpecialCharOnlyCheck,
     ) {
         self.rows_processed += 1;
         for (i, field) in record.iter().enumerate() {
@@ -738,6 +900,12 @@ impl RecordResult {
             }
             if dash_only_check.check(field) {
                 *self.dash_only_counts.entry(i).or_insert(0) += 1;
+            }
+            if boolean_like_check.check(field) {
+                *self.boolean_like_counts.entry(i).or_insert(0) += 1;
+            }
+            if special_char_only_check.check(field) {
+                *self.special_char_only_counts.entry(i).or_insert(0) += 1;
             }
         }
     }
@@ -762,6 +930,12 @@ impl RecordResult {
         for (col, count) in other.dash_only_counts {
             *self.dash_only_counts.entry(col).or_insert(0) += count;
         }
+        for (col, count) in other.boolean_like_counts {
+            *self.boolean_like_counts.entry(col).or_insert(0) += count;
+        }
+        for (col, count) in other.special_char_only_counts {
+            *self.special_char_only_counts.entry(col).or_insert(0) += count;
+        }
         self
     }
 }
@@ -777,6 +951,8 @@ pub struct ChunkProcessingResult {
     pub digits_only_counts: HashMap<usize, usize>,
     pub placeholder_counts: HashMap<usize, usize>,
     pub dash_only_counts: HashMap<usize, usize>,
+    pub boolean_like_counts: HashMap<usize, usize>,
+    pub special_char_only_counts: HashMap<usize, usize>,
 }
 
 // Struct to hold overall processing configuration
@@ -806,6 +982,8 @@ pub fn process_csv_chunks<R: Read>(
     let digits_only_check = DigitsOnlyCheck::new();
     let placeholder_check = PlaceholderCheck::new();
     let dash_only_check = DashOnlyCheck::new();
+    let boolean_like_check = BooleanLikeCheck::new();
+    let special_char_only_check = SpecialCharOnlyCheck::new();
 
     let mut results = Vec::new();
     let mut chunk_number = 0;
@@ -823,6 +1001,8 @@ pub fn process_csv_chunks<R: Read>(
                     &digits_only_check,
                     &placeholder_check,
                     &dash_only_check,
+                    &boolean_like_check,
+                    &special_char_only_check,
                     config.enable_parallel,
                 )?;
                 results.push(result);
@@ -845,6 +1025,8 @@ pub fn process_single_chunk(
     digits_only_check: &DigitsOnlyCheck,
     placeholder_check: &PlaceholderCheck,
     dash_only_check: &DashOnlyCheck,
+    boolean_like_check: &BooleanLikeCheck,
+    special_char_only_check: &SpecialCharOnlyCheck,
     enable_parallel: bool,
 ) -> Result<ChunkProcessingResult, Box<dyn std::error::Error>> {
     let combined = if enable_parallel {
@@ -861,6 +1043,8 @@ pub fn process_single_chunk(
                     digits_only_check,
                     placeholder_check,
                     dash_only_check,
+                    boolean_like_check,
+                    special_char_only_check,
                 );
                 acc
             })
@@ -875,6 +1059,8 @@ pub fn process_single_chunk(
                 digits_only_check,
                 placeholder_check,
                 dash_only_check,
+                boolean_like_check,
+                special_char_only_check,
             );
             acc
         })
@@ -889,6 +1075,8 @@ pub fn process_single_chunk(
         digits_only_counts: combined.digits_only_counts,
         placeholder_counts: combined.placeholder_counts,
         dash_only_counts: combined.dash_only_counts,
+        boolean_like_counts: combined.boolean_like_counts,
+        special_char_only_counts: combined.special_char_only_counts,
     })
 }
 

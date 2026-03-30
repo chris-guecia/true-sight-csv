@@ -23,6 +23,7 @@ A high-performance Rust-based CSV analysis tool that reveals hidden patterns and
 - Placeholder values — `TBD`, `TODO`, `PLACEHOLDER`, `UNKNOWN` (case-insensitive)
 - Digits-only values — fields containing only numeric characters
 - Dash-only values — fields whose trimmed value is `-` or `--`
+- Boolean-like values — fields containing `true`, `false`, `yes`, `no`, `1`, `0`, `on`, `off` (case-insensitive); flags columns stored as free text that should be a proper boolean type
 
 ### Header Checks (once per file)
 - Empty column names (e.g. trailing comma in header row)
