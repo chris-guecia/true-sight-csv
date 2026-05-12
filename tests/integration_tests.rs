@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::path::PathBuf;
 use true_sight_csv::{
-    analyze_headers, prepare_csv_reader, process_csv_chunks, CsvChunkIterator, DashOnlyCheck,
-    DigitsOnlyCheck, EmptyCheck, HeaderIssue, NullLikeCheck, PatternCheck, PlaceholderCheck,
-    ProcessingConfig, WhiteSpaceOnlyCheck,
+    analyze_headers, prepare_csv_reader, process_csv_chunks, BooleanLikeCheck, CsvChunkIterator,
+    DashOnlyCheck, DigitsOnlyCheck, EmptyCheck, HeaderIssue, NullLikeCheck, PatternCheck,
+    PlaceholderCheck, ProcessingConfig, SpecialCharOnlyCheck, WhiteSpaceOnlyCheck,
 };
 
 // Helper function to get the path to a fixture file
@@ -451,5 +451,64 @@ fn test_analyze_headers_all_numeric_triggers_warning() {
             .count(),
         headers.len(),
         "Every header should produce a NumericHeader issue"
+    );
+}
+
+#[test]
+fn test_special_char_only_check_patterns() {
+    let check = SpecialCharOnlyCheck::new();
+    // positive cases
+    assert!(check.check("???"), "??? should match");
+    assert!(check.check("!!!!"), "!!!! should match");
+    assert!(check.check("###"), "### should match");
+    assert!(check.check("***"), "*** should match");
+    assert!(check.check("  @#$  "), "trimmed special chars should match");
+    // negative cases
+    assert!(!check.check(""), "empty should not match");
+    assert!(!check.check("   "), "whitespace-only should not match");
+    assert!(!check.check("abc"), "letters should not match");
+    assert!(!check.check("123"), "digits should not match");
+    assert!(
+        !check.check("a!b"),
+        "mixed alphanum+special should not match"
+    );
+    assert!(!check.check("!a"), "letter with special should not match");
+    // metadata
+    assert_eq!(check.name(), "SPECIAL_CHAR_ONLY");
+}
+
+#[test]
+fn test_boolean_like_check_patterns() {
+    let check = BooleanLikeCheck::new();
+    // positive cases — all canonical boolean-like strings, case-insensitive + trimmed
+    assert!(check.check("true"));
+    assert!(check.check("True"));
+    assert!(check.check("TRUE"));
+    assert!(check.check("false"));
+    assert!(check.check("False"));
+    assert!(check.check("yes"));
+    assert!(check.check("YES"));
+    assert!(check.check("no"));
+    assert!(check.check("NO"));
+    assert!(check.check("1"));
+    assert!(check.check("0"));
+    assert!(check.check("on"));
+    assert!(check.check("ON"));
+    assert!(check.check("off"));
+    assert!(check.check("OFF"));
+    assert!(check.check("  true  "));
+    // negative cases
+    assert!(!check.check(""));
+    assert!(!check.check("maybe"));
+    assert!(!check.check("11"));
+    assert!(!check.check("truee"));
+    assert!(!check.check("yesno"));
+    assert!(!check.check("NULL"));
+    assert!(!check.check("TBD"));
+    // metadata
+    assert_eq!(check.name(), "BOOLEAN_LIKE");
+    assert_eq!(
+        check.show_check_pattern(),
+        "true, false, yes, no, 1, 0, on, off (case-insensitive)"
     );
 }

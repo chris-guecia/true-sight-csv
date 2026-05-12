@@ -117,6 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &result.digits_only_counts,
             &result.placeholder_counts,
             &result.dash_only_counts,
+            &result.boolean_like_counts,
+            &result.special_char_only_counts,
             result.rows_processed,
         );
     }

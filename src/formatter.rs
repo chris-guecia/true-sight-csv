@@ -63,6 +63,16 @@ impl SparkStyleFormatter {
         output.push_str(
             &self.format_issues_table(results, headers, "Dash-Only", |r| &r.dash_only_counts),
         );
+        output.push('\n');
+        output.push_str(
+            &self.format_issues_table(results, headers, "Boolean-Like", |r| &r.boolean_like_counts),
+        );
+        output.push('\n');
+        output.push_str(
+            &self.format_issues_table(results, headers, "Special-Char-Only", |r| {
+                &r.special_char_only_counts
+            }),
+        );
 
         output
     }
@@ -101,6 +111,14 @@ impl SparkStyleFormatter {
         let total_dash_only: usize = results
             .iter()
             .map(|r| r.dash_only_counts.values().sum::<usize>())
+            .sum();
+        let total_boolean_like: usize = results
+            .iter()
+            .map(|r| r.boolean_like_counts.values().sum::<usize>())
+            .sum();
+        let total_special_char_only: usize = results
+            .iter()
+            .map(|r| r.special_char_only_counts.values().sum::<usize>())
             .sum();
 
         let total_cells = total_rows * headers.len();
@@ -199,6 +217,30 @@ impl SparkStyleFormatter {
                     }
                 ),
             ],
+            vec![
+                "Boolean-Like Values".to_string(),
+                total_boolean_like.to_string(),
+                format!(
+                    "{:.3}%",
+                    if total_cells > 0 {
+                        (total_boolean_like as f64 / total_cells as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            ],
+            vec![
+                "Special-Char-Only Values".to_string(),
+                total_special_char_only.to_string(),
+                format!(
+                    "{:.3}%",
+                    if total_cells > 0 {
+                        (total_special_char_only as f64 / total_cells as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                ),
+            ],
         ];
 
         output.push_str("=== PROCESSING SUMMARY ===\n");
@@ -228,6 +270,8 @@ impl SparkStyleFormatter {
         let mut total_placeholder_counts = HashMap::new();
         let mut total_dash_only_counts = HashMap::new();
         let mut total_digits_only_counts = HashMap::new();
+        let mut total_boolean_like_counts = HashMap::new();
+        let mut total_special_char_only_counts = HashMap::new();
 
         for result in results {
             for (col, count) in &result.null_counts {
@@ -247,6 +291,12 @@ impl SparkStyleFormatter {
             }
             for (col, count) in &result.digits_only_counts {
                 *total_digits_only_counts.entry(*col).or_insert(0) += count;
+            }
+            for (col, count) in &result.boolean_like_counts {
+                *total_boolean_like_counts.entry(*col).or_insert(0) += count;
+            }
+            for (col, count) in &result.special_char_only_counts {
+                *total_special_char_only_counts.entry(*col).or_insert(0) += count;
             }
         }
 
@@ -268,6 +318,10 @@ impl SparkStyleFormatter {
             "Dash-Only % of Column".to_string(),
             "Digits-Only Count".to_string(),
             "Digits-Only % of Column".to_string(),
+            "Boolean-Like Count".to_string(),
+            "Boolean-Like % of Column".to_string(),
+            "SpecialChar Count".to_string(),
+            "SpecialChar % of Column".to_string(),
         ];
 
         let mut rows = Vec::new();
@@ -282,6 +336,14 @@ impl SparkStyleFormatter {
             let placeholder_count = total_placeholder_counts.get(&col_idx).copied().unwrap_or(0);
             let dash_only_count = total_dash_only_counts.get(&col_idx).copied().unwrap_or(0);
             let digits_only_count = total_digits_only_counts.get(&col_idx).copied().unwrap_or(0);
+            let boolean_like_count = total_boolean_like_counts
+                .get(&col_idx)
+                .copied()
+                .unwrap_or(0);
+            let special_char_only_count = total_special_char_only_counts
+                .get(&col_idx)
+                .copied()
+                .unwrap_or(0);
 
             // Calculate percentage of this column's cells (not all rows)
             let null_percentage = if total_rows > 0 {
@@ -314,6 +376,16 @@ impl SparkStyleFormatter {
             } else {
                 0.0
             };
+            let boolean_like_percentage = if total_rows > 0 {
+                (boolean_like_count as f64 / total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
+            let special_char_only_percentage = if total_rows > 0 {
+                (special_char_only_count as f64 / total_rows as f64) * 100.0
+            } else {
+                0.0
+            };
 
             rows.push(vec![
                 col_idx.to_string(),
@@ -330,6 +402,10 @@ impl SparkStyleFormatter {
                 format!("{:.1}%", dash_only_percentage),
                 digits_only_count.to_string(),
                 format!("{:.1}%", digits_only_percentage),
+                boolean_like_count.to_string(),
+                format!("{:.1}%", boolean_like_percentage),
+                special_char_only_count.to_string(),
+                format!("{:.1}%", special_char_only_percentage),
             ]);
         }
 
@@ -650,6 +726,8 @@ mod tests {
             digits_only_counts: HashMap::new(),
             placeholder_counts: HashMap::new(),
             dash_only_counts: HashMap::new(),
+            boolean_like_counts: HashMap::new(),
+            special_char_only_counts: HashMap::new(),
         }];
 
         let headers = vec!["col1".to_string(), "col2".to_string(), "col3".to_string()];
@@ -691,6 +769,8 @@ mod tests {
             digits_only_counts: HashMap::new(),
             placeholder_counts: HashMap::new(),
             dash_only_counts: HashMap::new(),
+            boolean_like_counts: HashMap::new(),
+            special_char_only_counts: HashMap::new(),
         }];
 
         let headers = vec!["col1".to_string(), "col2".to_string(), "col3".to_string()];
